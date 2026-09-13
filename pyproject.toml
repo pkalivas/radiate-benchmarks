@@ -1,0 +1,14 @@
+[project]
+name = "radiate-benchmarks"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "deap>=1.4.4",
+    "pandas>=3.0.5",
+    "pygad>=3.7.0",
+    "pymoo>=0.6.2",
+    "radiate @ file:///Users/peter/Dev/radiate/target/wheels/radiate-0.0.15-cp39-abi3-macosx_11_0_arm64.whl",
+    "tabulate>=0.10.0",
+]
