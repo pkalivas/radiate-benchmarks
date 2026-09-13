@@ -12,10 +12,13 @@ def main() -> None:
     )
     parser.add_argument("--suite", choices=[*SUITES.keys(), "all"], default="all")
     parser.add_argument(
-        "--trials", type=int, default=10, help="number of random seeds per (library, problem)"
+        "--trials",
+        type=int,
+        default=10,
+        help="number of random seeds per (library, problem)",
     )
     parser.add_argument("--population", type=int, default=100)
-    parser.add_argument("--generations", type=int, default=150)
+    parser.add_argument("--generations", type=int, default=200)
     parser.add_argument(
         "--quick",
         action="store_true",
@@ -30,7 +33,7 @@ def main() -> None:
         population, generations, trials = args.population, args.generations, args.trials
 
     config = Config(population_size=population, generations=generations)
-    seeds = list(range(trials))
+    seeds = list(map(lambda x: 1010 + x, range(trials)))
 
     suite_names = list(SUITES.keys()) if args.suite == "all" else [args.suite]
     results = []

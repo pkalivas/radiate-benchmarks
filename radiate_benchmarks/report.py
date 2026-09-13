@@ -259,14 +259,14 @@ def plot_speedup(summary: pd.DataFrame, out_path: Path) -> None:
 
 
 def plot_speedup_diverging(summary: pd.DataFrame, out_path: Path) -> None:
-    """Bar chart of each library's speed vs radiate as a signed linear multiple.
+    """Horizontal diverging bar chart: how many times faster/slower each library is vs radiate.
 
-    Same underlying ratio as plot_speedup (other's mean time / radiate's mean time), but
-    reshaped so the axis reads in plain multiples instead of log ticks: a ratio >= 1
-    (other slower) is plotted as +ratio ("radiate is Nx faster"), and a ratio < 1 (other
-    faster) is plotted as -1/ratio ("radiate is Nx slower"). This is the standard signed
-    fold-change convention -- values never fall strictly between -1 and 1, so the gap
-    around zero is expected, not missing data.
+    Same underlying ratio as plot_speedup (other's mean time / radiate's mean time), reshaped
+    into a signed linear multiple so the reader never has to read a log axis: a ratio >= 1
+    (other library slower) becomes +ratio, a ratio < 1 (other library faster) becomes
+    -1/ratio. Bars point right for "radiate faster", left for "radiate slower" -- labeled
+    directly on the chart -- and each bar is annotated with its own multiple so the reading
+    doesn't depend on the axis scale at all.
     """
     if "radiate" not in summary["library"].unique():
         return
@@ -280,36 +280,91 @@ def plot_speedup_diverging(summary: pd.DataFrame, out_path: Path) -> None:
     problems = list(summary["problem"].unique())
     baseline = summary[summary["library"] == "radiate"].set_index("problem")["time_mean_s"]
 
-    fig, ax = plt.subplots(figsize=(10, 4.5), facecolor=SURFACE)
-    _style_axes(ax)
-
     n_libs = len(other_libs)
-    width = 0.8 / n_libs
-    x = np.arange(len(problems))
+    n_problems = len(problems)
+    fig, ax = plt.subplots(figsize=(8, 0.55 * n_problems * n_libs + 1.5), facecolor=SURFACE)
+    _style_axes(ax)
+    ax.grid(axis="x", color=GRID, linewidth=0.8, zorder=0)
+    ax.grid(axis="y", visible=False)
 
+    bar_height = 0.8 / n_libs
+    y = np.arange(n_problems)
+
+    bars = []
     for i, lib in enumerate(other_libs):
         sub = summary[summary["library"] == lib].set_index("problem")["time_mean_s"]
-        values = []
-        for p in problems:
-            if p in sub.index and p in baseline.index:
-                ratio = sub.loc[p] / baseline.loc[p]
-                values.append(ratio if ratio >= 1 else -1.0 / ratio)
-            else:
-                values.append(np.nan)
-        offset = (i - (n_libs - 1) / 2) * width
-        ax.bar(x + offset, values, width * 0.9, color=LIBRARY_COLORS[lib], label=lib)
+        offset = (i - (n_libs - 1) / 2) * bar_height
+        for row, p in enumerate(problems):
+            if p not in sub.index or p not in baseline.index:
+                continue
+            ratio = sub.loc[p] / baseline.loc[p]
+            value = ratio if ratio >= 1 else -1.0 / ratio
+            bars.append((lib, row, offset, value))
 
-    ax.axhline(0.0, color=TEXT_SECONDARY, linewidth=1)
-    ax.set_xticks(x)
-    ax.set_xticklabels(problems, rotation=30, ha="right")
-    ax.set_ylabel("speed vs radiate (x)\n+ = radiate faster   − = radiate slower")
+    min_val = min((v for *_, v in bars), default=0.0)
+    max_val = max((v for *_, v in bars), default=0.0)
+    pad = 0.18 * max(abs(min_val), abs(max_val), 1.0)
+
+    seen_libs = set()
+    for lib, row, offset, value in bars:
+        ypos = row + offset
+        ax.barh(
+            ypos,
+            value,
+            bar_height * 0.9,
+            color=LIBRARY_COLORS[lib],
+            label=lib if lib not in seen_libs else None,
+        )
+        seen_libs.add(lib)
+        label_x = value + (pad * 0.1 if value >= 0 else -pad * 0.1)
+        ax.text(
+            label_x,
+            ypos,
+            f"{abs(value):.1f}x",
+            ha="left" if value >= 0 else "right",
+            va="center",
+            fontsize=8,
+            color=TEXT_SECONDARY,
+        )
+
+    ax.axvline(0.0, color=TEXT_SECONDARY, linewidth=1)
+    ax.set_xlim(min(min_val, 0.0) - pad, max(max_val, 0.0) + pad)
+    ax.set_yticks(y)
+    ax.set_yticklabels(problems)
+    ax.invert_yaxis()
+    ax.set_xlabel("speed multiple vs radiate")
+
+    # Header strip spelling out what each side of the zero line means, so the reader
+    # never has to infer direction from the sign of a number.
+    ax.text(
+        0.0,
+        1.04,
+        "◄ radiate slower",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=9,
+        color=TEXT_SECONDARY,
+        fontweight="bold",
+    )
+    ax.text(
+        1.0,
+        1.04,
+        "radiate faster ►",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=9,
+        color=TEXT_SECONDARY,
+        fontweight="bold",
+    )
     ax.set_title(
-        "Speed relative to radiate -- signed multiple (linear)",
+        "Speed relative to radiate",
         color=TEXT_PRIMARY,
         fontsize=12,
         loc="left",
     )
-    ax.legend(frameon=False, fontsize=9, labelcolor=TEXT_SECONDARY)
+    ax.legend(frameon=False, fontsize=9, labelcolor=TEXT_SECONDARY, loc="lower right")
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, facecolor=SURFACE)
     plt.close(fig)
