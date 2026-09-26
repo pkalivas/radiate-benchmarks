@@ -170,10 +170,13 @@ def run_mo(problem: MOProblem, config: Config, seed: int) -> BenchmarkResult:
             front_range=(config.population_size, config.population_size + 50),
         )
         .size(config.population_size)
-        .select(rd.Select.tournament(k=3), rd.Select.nsga2())
+        # NSGA-II: crowded-comparison tournament for parents, rank + crowding for survivors.
+        # SBX / polynomial mutation with eta=20 and a per-gene mutation rate, matching the
+        # DEAP (cxSimulatedBinaryBounded / mutPolynomialBounded indpb) and pymoo adapters.
+        .select(rd.Select.tournament_nsga2(), rd.Select.nsga2(), frac=0.5)
         .alter(
-            rd.Cross.sbx(config.crossover_rate, 2.0),
-            rd.Mutate.uniform(config.mutation_rate),
+            rd.Cross.sbx(config.crossover_rate, 20.0),
+            rd.Mutate.polynomial(config.mutation_rate, 20.0),
         )
         .limit(rd.Limit.generations(config.generations))
     )

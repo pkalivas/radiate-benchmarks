@@ -640,7 +640,7 @@ name = "radiate"
 version = "0.0.15"
 source = { path = "../radiate/target/wheels/radiate-0.0.15-cp39-abi3-macosx_11_0_arm64.whl" }
 wheels = [
-    { filename = "radiate-0.0.15-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:0d00c5d3c124cb9e51d275e125b460a500d26017aa75fc01b0b4540ce401cc41" },
+    { filename = "radiate-0.0.15-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:90e56c620855f575c5c2b9b7fc97a572b3e057a49a2db7b04500a0dcd6cd28af" },
 ]
 
 [package.metadata]
