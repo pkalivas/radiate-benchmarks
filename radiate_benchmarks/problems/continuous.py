@@ -1,5 +1,9 @@
 """Classic continuous function-optimization benchmarks.
 
+This module is the *reference* implementation: the spec generator writes these
+problems to ``spec/problems/*.json``, the Python runner evaluates them with these
+functions, and the aggregator re-scores every language's best solution with them.
+
 Every problem exposes a single-vector evaluator ``fn(x) -> float`` (used by
 DEAP/PyGAD/Radiate, which evaluate one individual at a time) and a batched
 ``batch_fn(X) -> np.ndarray`` (used by pymoo, which vectorizes over the
@@ -70,15 +74,39 @@ def ackley_batch(X: np.ndarray) -> np.ndarray:
     return -20 * np.exp(-0.2 * np.sqrt(sum1 / n)) - np.exp(sum2 / n) + 20 + np.e
 
 
-DIM = 30
+FUNCTIONS: dict[str, tuple[Callable[[np.ndarray], float], Callable[[np.ndarray], np.ndarray]]] = {
+    "sphere": (sphere, sphere_batch),
+    "rastrigin": (rastrigin, rastrigin_batch),
+    "rosenbrock": (rosenbrock, rosenbrock_batch),
+    "ackley": (ackley, ackley_batch),
+}
 
-PROBLEMS: list[ContinuousProblem] = [
-    ContinuousProblem("sphere", DIM, (-5.12, 5.12), sphere, sphere_batch, 0.0),
-    ContinuousProblem(
-        "rastrigin", DIM, (-5.12, 5.12), rastrigin, rastrigin_batch, 0.0
-    ),
-    ContinuousProblem(
-        "rosenbrock", DIM, (-2.048, 2.048), rosenbrock, rosenbrock_batch, 0.0
-    ),
-    ContinuousProblem("ackley", DIM, (-32.768, 32.768), ackley, ackley_batch, 0.0),
-]
+DIM = 30
+BOUNDS = {
+    "sphere": (-5.12, 5.12),
+    "rastrigin": (-5.12, 5.12),
+    "rosenbrock": (-2.048, 2.048),
+    "ackley": (-32.768, 32.768),
+}
+
+
+def spec_entries() -> list[dict]:
+    return [
+        {
+            "name": name,
+            "suite": "continuous",
+            "kind": "continuous",
+            "function": name,
+            "dim": DIM,
+            "bounds": list(bounds),
+            "minimize": True,
+        }
+        for name, bounds in BOUNDS.items()
+    ]
+
+
+def from_spec(spec: dict) -> ContinuousProblem:
+    fn, batch_fn = FUNCTIONS[spec["function"]]
+    return ContinuousProblem(
+        spec["name"], spec["dim"], tuple(spec["bounds"]), fn, batch_fn, 0.0
+    )

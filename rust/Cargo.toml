@@ -1,0 +1,19 @@
+[package]
+name = "radiate-benchmarks-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Local checkout, matching the local-wheel pin used by the Python runner.
+radiate = { path = "../../radiate/crates/radiate" }
+serde_json = "1"
+humantime = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# Keep this crate out of any parent workspace.
+[workspace]

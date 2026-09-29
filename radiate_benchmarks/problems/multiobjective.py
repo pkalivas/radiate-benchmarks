@@ -76,16 +76,44 @@ def _dtlz2_batch(X: np.ndarray) -> np.ndarray:
     return np.array([_dtlz2(row) for row in X])
 
 
-PROBLEMS: list[MOProblem] = [
-    MOProblem("zdt1", 30, 2, (0.0, 1.0), _zdt1, _zdt1_batch, (1.1, 1.1)),
-    MOProblem("zdt3", 30, 2, (0.0, 1.0), _zdt3, _zdt3_batch, (1.1, 1.1)),
-    MOProblem(
-        "dtlz2",
-        DTLZ2_N_VAR,
-        DTLZ2_N_OBJ,
-        (0.0, 1.0),
-        _dtlz2,
-        _dtlz2_batch,
-        (1.1, 1.1, 1.1),
-    ),
-]
+FUNCTIONS = {
+    "zdt1": (_zdt1, _zdt1_batch),
+    "zdt3": (_zdt3, _zdt3_batch),
+    "dtlz2": (_dtlz2, _dtlz2_batch),
+}
+
+
+def spec_entries() -> list[dict]:
+    rows = [
+        ("zdt1", 30, 2, (1.1, 1.1)),
+        ("zdt3", 30, 2, (1.1, 1.1)),
+        ("dtlz2", DTLZ2_N_VAR, DTLZ2_N_OBJ, (1.1, 1.1, 1.1)),
+    ]
+    return [
+        {
+            "name": name,
+            "suite": "multiobjective",
+            "kind": "mo",
+            "function": name,
+            "n_var": n_var,
+            "n_obj": n_obj,
+            "bounds": [0.0, 1.0],
+            "ref_point": list(ref_point),
+            # Objectives are minimized; the reported score (hypervolume) is maximized.
+            "minimize": False,
+        }
+        for name, n_var, n_obj, ref_point in rows
+    ]
+
+
+def from_spec(spec: dict) -> MOProblem:
+    fn, batch_fn = FUNCTIONS[spec["function"]]
+    return MOProblem(
+        spec["name"],
+        spec["n_var"],
+        spec["n_obj"],
+        tuple(spec["bounds"]),
+        fn,
+        batch_fn,
+        tuple(spec["ref_point"]),
+    )

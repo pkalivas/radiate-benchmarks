@@ -9,3 +9,11 @@ wheels/
 # Virtual environments
 .venv
 *.DS_Store
+
+# Per-language run logs (the result CSVs themselves are kept)
+results/*/log.txt
+
+# Generated on every run by main.py; only the report (charts + summary) is kept in git.
+/spec/
+/results/*
+!/results/report/

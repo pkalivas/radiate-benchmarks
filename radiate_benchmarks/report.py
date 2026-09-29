@@ -1,4 +1,9 @@
-"""Aggregate BenchmarkResults into a summary table and comparison plots."""
+"""Summary table and comparison charts, built only from the master CSVs.
+
+Nothing here runs a benchmark: every chart reads ``results/master/*.csv`` (written by
+``aggregate.py``), so charts can be iterated on without re-running anything. Each
+series is an *entry*, i.e. a ``library (language)`` pair such as ``radiate (python)``.
+"""
 
 from __future__ import annotations
 
@@ -9,16 +14,24 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 
-from radiate_benchmarks.adapters.base import BenchmarkResult
+# Categorical palette, in its fixed slot order.
+PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 
-# Fixed categorical color assignment, one slot per library, never cycled/reordered.
-LIBRARY_COLORS = {
-    "radiate": "#2a78d6",  # blue
-    "deap": "#eb6834",  # orange
-    "pymoo": "#1baf7a",  # aqua
-    "pygad": "#eda100",  # yellow
-}
-LIBRARY_ORDER = ["radiate", "deap", "pymoo", "pygad"]
+# Fixed entry order: an entry's position here is its palette slot, so its color never
+# changes when other entries come and go. New entries get appended here, not generated.
+ENTRY_ORDER = [
+    "radiate (python)",
+    "deap (python)",
+    "pymoo (python)",
+    "pygad (python)",
+    "radiate (rust)",
+    "jenetics (java)",
+    "jmetal (java)",
+    "geneticsharp (csharp)",
+]
+
+# The entry every speed-ratio chart is expressed relative to.
+BASELINE_ENTRY = "radiate (python)"
 
 TEXT_PRIMARY = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
@@ -32,28 +45,25 @@ HEAT_ORANGE = LinearSegmentedColormap.from_list(
     ["#5c1f0a", "#8f3312", "#c24a1c", "#eb6834", "#f19a72", "#f8c9ae", "#fde6d8"],
 )
 
-MO_PROBLEM_NAMES = {"zdt1", "zdt3", "dtlz2"}
 
 
-def to_dataframe(results: list[BenchmarkResult]) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "library": r.library,
-                "problem": r.problem,
-                "seed": r.seed,
-                "best_fitness": r.best_fitness,
-                "wall_time_s": r.wall_time_s,
-                "minimize": r.minimize,
-            }
-            for r in results
-        ]
-    )
+def ordered_entries(entries) -> list[str]:
+    """Registered entries in ENTRY_ORDER, then any unregistered ones alphabetically."""
+    present = set(entries)
+    known = [e for e in ENTRY_ORDER if e in present]
+    return known + sorted(present - set(ENTRY_ORDER))
+
+
+def entry_color(entry: str) -> str:
+    if entry in ENTRY_ORDER:
+        return PALETTE[ENTRY_ORDER.index(entry)]
+    # Unregistered entries borrow the slots after the registered ones, deterministically.
+    return PALETTE[(len(ENTRY_ORDER) + sum(map(ord, entry))) % len(PALETTE)]
 
 
 def summary_table(df: pd.DataFrame) -> pd.DataFrame:
     grouped = (
-        df.groupby(["problem", "library"])
+        df.groupby(["problem", "entry", "language", "library"])
         .agg(
             best_mean=("best_fitness", "mean"),
             best_std=("best_fitness", "std"),
@@ -63,10 +73,10 @@ def summary_table(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
-    grouped["library"] = pd.Categorical(
-        grouped["library"], categories=LIBRARY_ORDER, ordered=True
+    grouped["entry"] = pd.Categorical(
+        grouped["entry"], categories=ordered_entries(grouped["entry"]), ordered=True
     )
-    return grouped.sort_values(["problem", "library"]).reset_index(drop=True)
+    return grouped.sort_values(["problem", "entry"]).reset_index(drop=True)
 
 
 def _style_axes(ax):
@@ -82,14 +92,11 @@ def _style_axes(ax):
     ax.yaxis.label.set_color(TEXT_SECONDARY)
 
 
-def plot_convergence(
-    results: list[BenchmarkResult], problem_name: str, out_path: Path
-) -> None:
-    """Mean best-so-far per generation (+/- 1 std across trials), one line per library."""
+def plot_convergence(history: pd.DataFrame, problem_name: str, out_path: Path) -> None:
+    """Mean best-so-far per generation (+/- 1 std across trials), one line per entry."""
     by_lib: dict[str, list[list[float]]] = {}
-    for r in results:
-        if r.problem == problem_name and r.history:
-            by_lib.setdefault(r.library, []).append(r.history)
+    for (entry, _seed), run in history[history["problem"] == problem_name].groupby(["entry", "seed"]):
+        by_lib.setdefault(entry, []).append(run.sort_values("generation")["best_so_far"].tolist())
 
     if not by_lib:
         return
@@ -97,16 +104,14 @@ def plot_convergence(
     fig, ax = plt.subplots(figsize=(7, 4.5), facecolor=SURFACE)
     _style_axes(ax)
 
-    for lib in LIBRARY_ORDER:
-        if lib not in by_lib:
-            continue
+    for lib in ordered_entries(by_lib):
         histories = by_lib[lib]
         min_len = min(len(h) for h in histories)
         arr = np.array([h[:min_len] for h in histories])
         mean = arr.mean(axis=0)
         std = arr.std(axis=0)
         x = np.arange(min_len)
-        color = LIBRARY_COLORS[lib]
+        color = entry_color(lib)
         ax.plot(x, mean, color=color, linewidth=2, label=lib)
         ax.fill_between(x, mean - std, mean + std, color=color, alpha=0.15, linewidth=0)
 
@@ -121,12 +126,12 @@ def plot_convergence(
 
 def plot_mo_bars(df: pd.DataFrame, out_path: Path) -> None:
     """Grouped bar chart of mean final hypervolume (+/- std) per library per MO problem."""
-    mo_df = df[df["problem"].isin(MO_PROBLEM_NAMES)]
+    mo_df = df[df["suite"] == "multiobjective"]
     if mo_df.empty:
         return
 
-    problems = [p for p in ["zdt1", "zdt3", "dtlz2"] if p in mo_df["problem"].unique()]
-    libs = [lib for lib in LIBRARY_ORDER if lib in mo_df["library"].unique()]
+    problems = list(mo_df["problem"].unique())
+    libs = ordered_entries(mo_df["entry"])
 
     fig, ax = plt.subplots(figsize=(7, 4.5), facecolor=SURFACE)
     _style_axes(ax)
@@ -138,7 +143,7 @@ def plot_mo_bars(df: pd.DataFrame, out_path: Path) -> None:
     for i, lib in enumerate(libs):
         means, stds = [], []
         for p in problems:
-            vals = mo_df[(mo_df["problem"] == p) & (mo_df["library"] == lib)]["best_fitness"]
+            vals = mo_df[(mo_df["problem"] == p) & (mo_df["entry"] == lib)]["best_fitness"]
             means.append(vals.mean())
             stds.append(vals.std())
         offset = (i - (n_libs - 1) / 2) * width
@@ -147,7 +152,7 @@ def plot_mo_bars(df: pd.DataFrame, out_path: Path) -> None:
             means,
             width * 0.9,
             yerr=stds,
-            color=LIBRARY_COLORS[lib],
+            color=entry_color(lib),
             label=lib,
             capsize=3,
             error_kw={"ecolor": TEXT_SECONDARY, "elinewidth": 1},
@@ -163,49 +168,64 @@ def plot_mo_bars(df: pd.DataFrame, out_path: Path) -> None:
     plt.close(fig)
 
 
-def plot_speed_bars(summary: pd.DataFrame, out_path: Path) -> None:
-    """Grouped bar chart of mean wall-clock time (+/- std) per library, one group per problem.
+def _format_seconds(t: float) -> str:
+    return f"{t * 1000:.1f} ms" if t < 1 else f"{t:.2f} s"
 
-    Log-scaled y-axis since a continuous-problem run and a full MO run can differ by orders
-    of magnitude, and both need to stay legible in the same figure.
+
+def plot_problem_speed(summary: pd.DataFrame, problem: str, entries: list[str], out_path: Path) -> None:
+    """One problem's mean wall-clock time per entry, as horizontal bars (+/- 1 std).
+
+    Rows are sorted fastest first. Every entry in the dataset gets a row; one with no runs
+    for this problem (e.g. a library without multi-objective support) goes at the bottom,
+    marked with an x at zero instead of a bar. radiate entries have bold labels.
+    The axis is linear so bar lengths stay honest; each bar carries its value, which keeps
+    the fastest entries readable even when they're 100x shorter than the slowest.
     """
-    if summary.empty:
+    sub = summary[summary["problem"] == problem].set_index("entry")
+    if sub.empty:
         return
+    means = sub["time_mean_s"]
+    stds = sub["time_std_s"].fillna(0.0)
+    x_max = float((means + stds).max())
+    pad = 0.015 * x_max
+    supported = sorted((e for e in entries if e in sub.index), key=lambda e: float(means.loc[e]))
+    entries = supported + [e for e in entries if e not in sub.index]
 
-    problems = list(summary["problem"].unique())
-    libs = [lib for lib in LIBRARY_ORDER if lib in summary["library"].unique()]
-
-    fig, ax = plt.subplots(figsize=(10, 4.5), facecolor=SURFACE)
+    fig, ax = plt.subplots(figsize=(7.5, 0.48 * len(entries) + 1.5), facecolor=SURFACE)
     _style_axes(ax)
+    ax.grid(axis="y", visible=False)
 
-    n_libs = len(libs)
-    width = 0.8 / n_libs
-    x = np.arange(len(problems))
-
-    for i, lib in enumerate(libs):
-        sub = summary[summary["library"] == lib].set_index("problem")
-        means = [sub.loc[p, "time_mean_s"] if p in sub.index else np.nan for p in problems]
-        stds = [sub.loc[p, "time_std_s"] if p in sub.index else 0.0 for p in problems]
-        offset = (i - (n_libs - 1) / 2) * width
-        ax.bar(
-            x + offset,
-            means,
-            width * 0.9,
-            yerr=stds,
-            color=LIBRARY_COLORS[lib],
-            label=lib,
-            capsize=3,
-            error_kw={"ecolor": TEXT_SECONDARY, "elinewidth": 1},
+    for row, entry in enumerate(entries):
+        if entry not in sub.index:
+            ax.text(pad, row, "✗  not supported", ha="left", va="center", fontsize=9, color=TEXT_SECONDARY)
+            continue
+        mean, std = float(means.loc[entry]), float(stds.loc[entry])
+        ax.barh(
+            row,
+            mean,
+            height=0.62,
+            xerr=std,
+            color=entry_color(entry),
+            error_kw={"ecolor": TEXT_SECONDARY, "elinewidth": 1, "capsize": 2},
+            zorder=2,
         )
+        ax.text(mean + std + pad, row, _format_seconds(mean), ha="left", va="center", fontsize=8.5, color=TEXT_PRIMARY)
 
-    ax.set_yscale("log")
-    ax.set_xticks(x)
-    ax.set_xticklabels(problems, rotation=30, ha="right")
-    ax.set_ylabel("wall-clock time (s, log scale)")
-    ax.set_title(
-        "Speed: mean wall-clock time per run", color=TEXT_PRIMARY, fontsize=12, loc="left"
+    ax.set_yticks(range(len(entries)))
+    ax.set_yticklabels(entries)
+    for label, entry in zip(ax.get_yticklabels(), entries):
+        if entry.startswith("radiate "):
+            label.set_fontweight("bold")
+            label.set_color(TEXT_PRIMARY)
+    ax.set_ylim(len(entries) - 0.35, -0.65)  # first entry on top, room below the last row
+    ax.set_xlim(0, x_max * 1.2)
+    ax.set_xlabel("mean wall-clock time per run (s)")
+    n_trials = int(sub["n_trials"].max())
+    ax.set_title(f"Speed: {problem}", color=TEXT_PRIMARY, fontsize=12, loc="left", pad=20)
+    ax.text(
+        0.0, 1.015, f"mean ± std over {n_trials} seeds, lower is faster",
+        transform=ax.transAxes, ha="left", va="bottom", fontsize=8.5, color=TEXT_SECONDARY,
     )
-    ax.legend(frameon=False, fontsize=9, labelcolor=TEXT_SECONDARY)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, facecolor=SURFACE)
     plt.close(fig)
@@ -217,17 +237,15 @@ def plot_speedup(summary: pd.DataFrame, out_path: Path) -> None:
     Radiate is the 1x baseline (dashed reference line) rather than its own bar, since the
     interesting number here is the margin, not radiate's absolute time again.
     """
-    if "radiate" not in summary["library"].unique():
+    if BASELINE_ENTRY not in set(summary["entry"]):
         return
 
-    other_libs = [
-        lib for lib in LIBRARY_ORDER if lib != "radiate" and lib in summary["library"].unique()
-    ]
+    other_libs = [lib for lib in ordered_entries(summary["entry"]) if lib != BASELINE_ENTRY]
     if not other_libs:
         return
 
     problems = list(summary["problem"].unique())
-    baseline = summary[summary["library"] == "radiate"].set_index("problem")["time_mean_s"]
+    baseline = summary[summary["entry"] == BASELINE_ENTRY].set_index("problem")["time_mean_s"]
 
     fig, ax = plt.subplots(figsize=(10, 4.5), facecolor=SURFACE)
     _style_axes(ax)
@@ -237,21 +255,21 @@ def plot_speedup(summary: pd.DataFrame, out_path: Path) -> None:
     x = np.arange(len(problems))
 
     for i, lib in enumerate(other_libs):
-        sub = summary[summary["library"] == lib].set_index("problem")["time_mean_s"]
+        sub = summary[summary["entry"] == lib].set_index("problem")["time_mean_s"]
         ratios = [
             sub.loc[p] / baseline.loc[p] if p in sub.index and p in baseline.index else np.nan
             for p in problems
         ]
         offset = (i - (n_libs - 1) / 2) * width
-        ax.bar(x + offset, ratios, width * 0.9, color=LIBRARY_COLORS[lib], label=f"{lib} / radiate")
+        ax.bar(x + offset, ratios, width * 0.9, color=entry_color(lib), label=f"{lib} / {BASELINE_ENTRY}")
 
     ax.axhline(1.0, color=TEXT_SECONDARY, linewidth=1, linestyle="--")
     ax.set_yscale("log")
     ax.set_xticks(x)
     ax.set_xticklabels(problems, rotation=30, ha="right")
-    ax.set_ylabel("time relative to radiate (x, log scale)")
+    ax.set_ylabel(f"time relative to {BASELINE_ENTRY} (x, log scale)")
     ax.set_title(
-        "Speed relative to radiate (1x baseline)", color=TEXT_PRIMARY, fontsize=12, loc="left"
+        f"Speed relative to {BASELINE_ENTRY} (1x baseline)", color=TEXT_PRIMARY, fontsize=12, loc="left"
     )
     ax.legend(frameon=False, fontsize=9, labelcolor=TEXT_SECONDARY)
     fig.tight_layout()
@@ -269,17 +287,15 @@ def plot_speedup_diverging(summary: pd.DataFrame, out_path: Path) -> None:
     directly on the chart -- and each bar is annotated with its own multiple so the reading
     doesn't depend on the axis scale at all.
     """
-    if "radiate" not in summary["library"].unique():
+    if BASELINE_ENTRY not in set(summary["entry"]):
         return
 
-    other_libs = [
-        lib for lib in LIBRARY_ORDER if lib != "radiate" and lib in summary["library"].unique()
-    ]
+    other_libs = [lib for lib in ordered_entries(summary["entry"]) if lib != BASELINE_ENTRY]
     if not other_libs:
         return
 
     problems = list(summary["problem"].unique())
-    baseline = summary[summary["library"] == "radiate"].set_index("problem")["time_mean_s"]
+    baseline = summary[summary["entry"] == BASELINE_ENTRY].set_index("problem")["time_mean_s"]
 
     n_libs = len(other_libs)
     n_problems = len(problems)
@@ -293,7 +309,7 @@ def plot_speedup_diverging(summary: pd.DataFrame, out_path: Path) -> None:
 
     bars = []
     for i, lib in enumerate(other_libs):
-        sub = summary[summary["library"] == lib].set_index("problem")["time_mean_s"]
+        sub = summary[summary["entry"] == lib].set_index("problem")["time_mean_s"]
         offset = (i - (n_libs - 1) / 2) * bar_height
         for row, p in enumerate(problems):
             if p not in sub.index or p not in baseline.index:
@@ -313,7 +329,7 @@ def plot_speedup_diverging(summary: pd.DataFrame, out_path: Path) -> None:
             ypos,
             value,
             bar_height * 0.9,
-            color=LIBRARY_COLORS[lib],
+            color=entry_color(lib),
             label=lib if lib not in seen_libs else None,
         )
         seen_libs.add(lib)
@@ -333,14 +349,14 @@ def plot_speedup_diverging(summary: pd.DataFrame, out_path: Path) -> None:
     ax.set_yticks(y)
     ax.set_yticklabels(problems)
     ax.invert_yaxis()
-    ax.set_xlabel("speed multiple vs radiate")
+    ax.set_xlabel(f"speed multiple vs {BASELINE_ENTRY}")
 
     # Header strip spelling out what each side of the zero line means, so the reader
     # never has to infer direction from the sign of a number.
     ax.text(
         0.0,
         1.04,
-        "◄ radiate slower",
+        f"◄ {BASELINE_ENTRY} slower",
         transform=ax.transAxes,
         ha="left",
         va="bottom",
@@ -351,7 +367,7 @@ def plot_speedup_diverging(summary: pd.DataFrame, out_path: Path) -> None:
     ax.text(
         1.0,
         1.04,
-        "radiate faster ►",
+        f"{BASELINE_ENTRY} faster ►",
         transform=ax.transAxes,
         ha="right",
         va="bottom",
@@ -360,7 +376,7 @@ def plot_speedup_diverging(summary: pd.DataFrame, out_path: Path) -> None:
         fontweight="bold",
     )
     ax.set_title(
-        "Speed relative to radiate",
+        f"Speed relative to {BASELINE_ENTRY}",
         color=TEXT_PRIMARY,
         fontsize=12,
         loc="left",
@@ -395,15 +411,16 @@ def plot_perf_heatmap(df: pd.DataFrame, summary: pd.DataFrame, out_path: Path) -
         return
 
     problems = list(summary["problem"].unique())
-    libs = [lib for lib in LIBRARY_ORDER if lib in summary["library"].unique()]
+    libs = ordered_entries(summary["entry"])
     minimize_by_problem = df.groupby("problem")["minimize"].first()
+    tick_labels = [lib.replace(" (", "\n(") for lib in libs]
 
     def build_matrix(value_col: str, force_minimize: bool | None) -> tuple[np.ndarray, np.ndarray]:
         scores = np.full((len(problems), len(libs)), np.nan)
         values = np.full((len(problems), len(libs)), np.nan)
         for i, p in enumerate(problems):
             minimize = force_minimize if force_minimize is not None else bool(minimize_by_problem[p])
-            sub = summary[summary["problem"] == p].set_index("library")[value_col]
+            sub = summary[summary["problem"] == p].set_index("entry")[value_col]
             if sub.empty:
                 continue
             best_value = sub.min() if minimize else sub.max()
@@ -439,7 +456,7 @@ def plot_perf_heatmap(df: pd.DataFrame, summary: pd.DataFrame, out_path: Path) -
         ax.grid(which="minor", color=SURFACE, linewidth=2)
         ax.tick_params(which="minor", length=0)
         ax.set_xticks(range(len(libs)))
-        ax.set_xticklabels(libs, color=TEXT_SECONDARY, fontsize=9)
+        ax.set_xticklabels(tick_labels, color=TEXT_SECONDARY, fontsize=9)
         ax.set_yticks(range(len(problems)))
         ax.set_yticklabels(problems, color=TEXT_SECONDARY, fontsize=9)
         ax.set_title(title, color=TEXT_PRIMARY, fontsize=11, loc="left")
@@ -474,9 +491,16 @@ def plot_perf_heatmap(df: pd.DataFrame, summary: pd.DataFrame, out_path: Path) -
     plt.close(fig)
 
 
-def write_report(results: list[BenchmarkResult], out_dir: Path) -> None:
+def write_report(master_dir: Path, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    df = to_dataframe(results)
+    for stale in out_dir.glob("*.png"):
+        stale.unlink()
+
+    df = pd.read_csv(master_dir / "runs.csv")
+    history = pd.read_csv(master_dir / "history.csv")
+    if df.empty:
+        print("no runs in the master dataset, nothing to report")
+        return
 
     summary = summary_table(df)
     summary.to_csv(out_dir / "summary.csv", index=False)
@@ -484,16 +508,16 @@ def write_report(results: list[BenchmarkResult], out_dir: Path) -> None:
         f.write(summary.to_markdown(index=False, floatfmt=".4f"))
         f.write("\n")
 
-    for problem_name in df["problem"].unique():
-        if problem_name in MO_PROBLEM_NAMES:
-            continue
-        plot_convergence(results, problem_name, out_dir / f"convergence_{problem_name}.png")
+    for problem_name in df.loc[df["suite"] != "multiobjective", "problem"].unique():
+        plot_convergence(history, problem_name, out_dir / f"convergence_{problem_name}.png")
 
     plot_mo_bars(df, out_dir / "mo_hypervolume.png")
 
-    plot_speed_bars(summary, out_dir / "speed_comparison.png")
-    plot_speedup(summary, out_dir / "speed_relative_to_radiate.png")
-    plot_speedup_diverging(summary, out_dir / "speed_relative_to_radiate_linear.png")
+    entries = ordered_entries(summary["entry"])
+    for problem_name in df["problem"].unique():
+        plot_problem_speed(summary, problem_name, entries, out_dir / f"speed_{problem_name}.png")
+    plot_speedup(summary, out_dir / "speed_relative_to_baseline.png")
+    plot_speedup_diverging(summary, out_dir / "speed_relative_to_baseline_linear.png")
     plot_perf_heatmap(df, summary, out_dir / "heatmap_overview.png")
 
-    print(f"Wrote report to {out_dir}/")
+    print(f"wrote report to {out_dir}/")

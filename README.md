@@ -1,7 +1,19 @@
 # radiate-benchmarks
 
-Head-to-head benchmarks comparing [radiate](https://github.com/pkalivas/radiate) against three
-industry-standard Python EA/GA libraries: **DEAP**, **pymoo**, and **PyGAD**.
+Head-to-head benchmarks comparing [radiate](https://github.com/pkalivas/radiate) against other
+EA/GA libraries, across languages. Each language has its own runner that writes a common CSV
+format, and a Python aggregator merges them all into one master dataset for charting.
+
+Currently benchmarked:
+
+| Language | Libraries | Runner needs |
+|---|---|---|
+| Python | **radiate** (bindings), **DEAP**, **pymoo** (**PyGAD** has an adapter but is disabled, see the SBX bug noted in it) | `uv` |
+| Rust | **radiate** (native), built against the local checkout at `../radiate` | `cargo` |
+| Java | **Jenetics** (all problems), **jMetal** (multi-objective only) | JDK 25 + Maven (`brew install openjdk maven`); Jenetics 9 requires Java 25 |
+| C# | **GeneticSharp** (single-objective only) | .NET 9 SDK |
+
+A language whose toolchain is missing is skipped, not failed.
 
 ## Suites
 
@@ -19,18 +31,30 @@ each EA's own randomness.
 
 ```bash
 uv run main.py --quick              # fast smoke test (pop=20, gens=15, 2 trials)
-uv run main.py                      # full run: pop=100, gens=150, 10 trials per (library, problem)
+uv run main.py                      # full run: pop=100, gens=200, 10 trials per (library, problem)
 uv run main.py --suite continuous   # just one suite
+uv run main.py --lang python        # just some languages
+uv run main.py --aggregate-only     # no benchmarks: re-merge existing results, redraw charts
 uv run main.py --trials 20 --population 200 --generations 300
 ```
 
-Results land in `results/`: `summary.csv` / `summary.md` (mean +/- std of best fitness and
-wall-clock time per library/problem), `convergence_<problem>.png` for every single-objective
-problem, `mo_hypervolume.png` for the multi-objective suite, `speed_comparison.png` (mean
-wall-clock time per library, grouped by problem, log-scaled), and
-`speed_relative_to_radiate.png` (each other library's time as a multiple of radiate's, per
-problem), and `heatmap_overview.png` (problem x library grid, quality and speed side by side,
-each cell colored by performance relative to the best library on that row).
+A run has four stages:
+
+1. **Spec**: `main.py` writes `spec/`, the problem instances, shared config and seeds that
+   every language reads. Instances are generated once, so every library solves the exact
+   same problem.
+2. **Languages**: every top-level `<lang>/run.sh` runs in turn (never in parallel, so they
+   don't compete for CPU) and writes `results/<lang>/{runs,history,fronts}.csv`. A language
+   whose toolchain isn't installed is skipped.
+3. **Aggregate**: all languages are merged into `results/master/`. Stale rows from an older
+   spec are dropped, every best solution is re-scored against the Python reference fitness
+   functions, and hypervolume is computed for every multi-objective front.
+   Anything rejected lands in `results/master/rejected.csv` with a reason.
+4. **Report**: charts and `summary.csv` / `summary.md` are built from the master CSVs into
+   `results/report/`. Every series is a `library (language)` entry, e.g. `radiate (python)`.
+
+`schema.md` is the contract every language runner implements: arguments, exit codes, the
+spec format, the CSV columns, and what gets timed.
 
 ## Methodology notes
 
@@ -54,24 +78,34 @@ each cell colored by performance relative to the best library on that row).
 ## Layout
 
 ```
-radiate_benchmarks/
-  problems/            problem instances + fitness functions, one Python function per problem
-  adapters/             one module per library, translating a problem into that library's API
-    base.py              BenchmarkResult, Config, hypervolume()
-    radiate_adapter.py
-    deap_adapter.py
-    pymoo_adapter.py
-    pygad_adapter.py
-  harness.py            wires problems x libraries x seeds together
-  report.py             aggregation, plots, summary table
-main.py                  CLI entrypoint
+main.py                   orchestrator: spec -> each <lang>/run.sh -> aggregate -> report
+schema.md                 the runner contract
+radiate_benchmarks/       shared Python, not tied to any one language runner
+  problems/               reference problem definitions + fitness functions (+ spec generation)
+  spec.py                 writes / loads spec/, computes spec_hash
+  schema.py               CSV column layout
+  aggregate.py            merge, validate, re-score, hypervolume -> results/master/
+  report.py               charts + summary table from results/master/ only
+rust/                     Rust language runner (radiate native)
+java/                     Java language runner (Jenetics, jMetal; Maven project)
+csharp/                   C# language runner (GeneticSharp; .NET 9 project)
+python/                   Python language runner
+  run.sh
+  runner.py               libraries x problems x seeds -> CSVs
+  adapters/               one module per library (radiate, DEAP, pymoo, PyGAD)
+spec/                     generated each run
+results/<lang>/           each language's raw CSVs
+results/master/           merged + validated CSVs
+results/report/           charts + summary
 ```
 
-## Adding a problem or library
+## Adding a library or language
 
-- **New problem**: add it to the relevant module in `problems/`, then add a `(problem, method_name)`
-  entry to the matching suite in `harness.py`'s `SUITES`, and add a `run_<method_name>` function to
-  each adapter.
-- **New library**: add `<name>_adapter.py` implementing `run_continuous`, `run_knapsack`, `run_tsp`,
-  `run_nqueens`, and `run_mo`, then register it in `harness.py`'s `LIBRARIES` and give it a color slot
-  in `report.py`'s `LIBRARY_COLORS`/`LIBRARY_ORDER`.
+- **Python library**: add `python/adapters/<name>_adapter.py` with `run_continuous`,
+  `run_knapsack`, `run_tsp`, `run_nqueens` and/or `run_mo` (leave out any it doesn't
+  support), register it in `LIBRARIES` in `python/runner.py`, and add its entry
+  (e.g. `"<name> (python)"`) to `ENTRY_ORDER` in `radiate_benchmarks/report.py` to fix its color.
+- **New language**: create `<lang>/run.sh` that follows `schema.md`. `main.py` finds it on the
+  next run. Add its entries to `ENTRY_ORDER`.
+- **New problem**: add it to `radiate_benchmarks/problems/` (spec entry, `from_spec`, reference
+  fitness), document its `kind` in `schema.md`, then implement it in each language runner.
