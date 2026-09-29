@@ -25,10 +25,11 @@ TEXT_SECONDARY = "#52514e"
 SURFACE = "#fcfcfb"
 GRID = "#e3e2dd"
 
-# Sequential single-hue ramp (blue, light -> dark) for magnitude heatmaps.
-SEQUENTIAL_BLUE = LinearSegmentedColormap.from_list(
-    "sequential_blue",
-    ["#cde2fb", "#86b6ef", "#3987e5", "#2a78d6", "#1c5cab", "#0d366b"],
+# Sequential single-hue heat ramp (orange, dark -> light) for the performance heatmap:
+# indexed by a 0..1 "relative to best" score, so 0 (worst) is darkest and 1 (best) is lightest.
+HEAT_ORANGE = LinearSegmentedColormap.from_list(
+    "heat_orange",
+    ["#5c1f0a", "#8f3312", "#c24a1c", "#eb6834", "#f19a72", "#f8c9ae", "#fde6d8"],
 )
 
 MO_PROBLEM_NAMES = {"zdt1", "zdt3", "dtlz2"}
@@ -385,7 +386,7 @@ def plot_perf_heatmap(df: pd.DataFrame, summary: pd.DataFrame, out_path: Path) -
     """Problem x library heatmap: quality and speed side by side.
 
     Each cell is colored by its performance relative to the best library on that row
-    (1.0 = best, on the same sequential-blue scale in both panels) so problems with
+    (1.0 = best = lightest, 0 = worst = darkest, on the same orange heat scale in both panels) so problems with
     wildly different units and "better" directions (minimize vs maximize fitness,
     always-minimize time) become directly comparable at a glance. Cell text shows the
     actual mean value; color carries the relative rank.
@@ -431,7 +432,12 @@ def plot_perf_heatmap(df: pd.DataFrame, summary: pd.DataFrame, out_path: Path) -
     ]
     im = None
     for ax, scores, values, title, fmt in panels:
-        im = ax.imshow(scores, cmap=SEQUENTIAL_BLUE, vmin=0, vmax=1, aspect="auto")
+        im = ax.imshow(scores, cmap=HEAT_ORANGE, vmin=0, vmax=1, aspect="auto")
+        # 2px surface gaps between cells so the near-white "best" cells keep a visible edge.
+        ax.set_xticks(np.arange(-0.5, len(libs), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(problems), 1), minor=True)
+        ax.grid(which="minor", color=SURFACE, linewidth=2)
+        ax.tick_params(which="minor", length=0)
         ax.set_xticks(range(len(libs)))
         ax.set_xticklabels(libs, color=TEXT_SECONDARY, fontsize=9)
         ax.set_yticks(range(len(problems)))
@@ -444,7 +450,7 @@ def plot_perf_heatmap(df: pd.DataFrame, summary: pd.DataFrame, out_path: Path) -
             for j in range(len(libs)):
                 if np.isnan(scores[i, j]):
                     continue
-                text_color = SURFACE if scores[i, j] >= 0.6 else TEXT_PRIMARY
+                text_color = SURFACE if scores[i, j] < 0.5 else TEXT_PRIMARY
                 ax.text(
                     j,
                     i,
@@ -456,7 +462,7 @@ def plot_perf_heatmap(df: pd.DataFrame, summary: pd.DataFrame, out_path: Path) -
                 )
 
     cbar = fig.colorbar(im, cax=cax)
-    cbar.set_label("relative to best in row (1.0 = best)", color=TEXT_SECONDARY, fontsize=9)
+    cbar.set_label("relative to best in row (1.0 = best, lightest)", color=TEXT_SECONDARY, fontsize=9)
     cbar.ax.tick_params(colors=TEXT_SECONDARY, labelsize=8)
     cbar.outline.set_visible(False)
 
